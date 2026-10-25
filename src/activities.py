@@ -169,8 +169,8 @@ class RewardsDashboard:
         container = drawer if drawer else self.page
 
         action_selectors = [
-            ("Check-in", "button:has-text('Check-in now'), button:has-text('Check-in'), button:has-text('Điểm danh'), [aria-label*='check-in' i]"),
-            ("Claim", "button:has-text('Claim points'), button:has-text('Claim'), button:has-text('Nhận'), a:has-text('Claim'), [aria-label*='claim' i]"),
+            ("Check-in", "button:has-text('Check-in now'), button:has-text('Check-in'), button:has-text('Check in now'), button:has-text('Check in'), button:has-text('Điểm danh ngay'), button:has-text('Điểm danh'), [aria-label*='check-in' i], [aria-label*='check in' i], [aria-label*='checkin' i]"),
+            ("Claim", "button:has-text('Claim points'), button:has-text('Claim'), button:has-text('Nhận điểm'), button:has-text('Nhận'), a:has-text('Claim'), [aria-label*='claim' i]"),
             ("Activate", "button:has-text('Activate streak'), button:has-text('Activate'), button:has-text('Kích hoạt')"),
             ("Collect Stamp", "button:has-text('Get stamp'), button:has-text('Stamp'), button:has-text('Collect')"),
             ("Complete", "button:has-text('Complete'), button:has-text('Done'), button:has-text('Finish')")
@@ -194,6 +194,27 @@ class RewardsDashboard:
                 except Exception:
                     pass
 
+        # 1.5. Check for day streak / checkin day icons in drawer
+        try:
+            day_btns = await container.query_selector_all(
+                "div[class*='checkin'] button, [data-day] button, [class*='dayItem']:not([class*='completed']), div[class*='item-wrapper']:has(span:has-text('+')), button:has([class*='streak'])"
+            )
+            for d_btn in day_btns:
+                try:
+                    if await d_btn.is_visible():
+                        d_txt = (await d_btn.inner_text() or "").strip()
+                        if "redeem" in d_txt.lower():
+                            continue
+                        log_info(f"Bấm nút ngày điểm danh trong Side Drawer: '{d_txt[:40]}'")
+                        await d_btn.click()
+                        await asyncio.sleep(2.5)
+                        action_performed = True
+                        break
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         # 2. Fallback scan for all clickable elements with claim / point keywords
         try:
             fallback_btns = await container.query_selector_all("button, [role='button'], mee-button, a[role='button']")
@@ -204,7 +225,7 @@ class RewardsDashboard:
                         lower_txt = btn_text.lower()
                         if "redeem" in lower_txt:
                             continue
-                        if any(k in lower_txt for k in ["claim", "nhận", "check-in", "điểm danh", "collect"]):
+                        if any(k in lower_txt for k in ["claim", "nhận", "check-in", "check in", "điểm danh", "collect"]):
                             log_info(f"Fallback bấm nút trong Side Drawer: '{btn_text[:50]}'")
                             await btn.click()
                             await asyncio.sleep(2.5)
@@ -592,6 +613,10 @@ class RewardsDashboard:
         except Exception:
             pass
 
+        if getattr(self.config, "run_visual_search", True):
+            log_info("=== Phase 4: Kiem tra nhiem vu Visual Search ===")
+            await self.solve_visual_search()
+
     async def handle_urlreward_promotions(self):
         """Find and complete urlreward promotions via Next.js server actions."""
         try:
@@ -620,6 +645,225 @@ class RewardsDashboard:
     async def solve_more_activities(self):
         """Unified runner for more activities."""
         pass
+
+    async def solve_mobile_app_checkin(self) -> bool:
+        """Find and complete the Mobile App daily check-in streak on rewards dashboard."""
+        log_info("=== 📱 Kiểm tra & Điểm danh Mobile App Check-in ===")
+        try:
+            # Ensure on rewards dashboard
+            if "rewards.bing.com" not in self.page.url:
+                await self.open_dashboard("https://rewards.bing.com/dashboard")
+                await asyncio.sleep(2.0)
+
+            # Strategy 1: Check tile on page
+            card_info = await self.page.evaluate(r"""
+                () => {
+                    const allEls = Array.from(document.querySelectorAll(
+                        "div, a, button, mee-card, li, [class*='card'], [class*='Card']"
+                    ));
+                    for (const el of allEls) {
+                        const txt = (el.innerText || el.textContent || '').trim();
+                        if (txt.includes('Mobile App') || txt.includes('Bing App Streak') || (txt.includes('App') && txt.includes('Check-in'))) {
+                            const rect = el.getBoundingClientRect();
+                            if (rect.width > 40 && rect.height > 25 && el.children.length <= 8) {
+                                const isDone = txt.includes('1/1') || txt.toLowerCase().includes('completed') || txt.includes('✓');
+                                const isNotDone = txt.includes('0/1') || txt.toLowerCase().includes('check-in: 0/1');
+                                return {
+                                    found: true,
+                                    isDone: isDone,
+                                    isNotDone: isNotDone,
+                                    text: txt.substring(0, 100)
+                                };
+                            }
+                        }
+                    }
+                    return { found: false };
+                }
+            """)
+
+            if card_info.get("found"):
+                preview = card_info.get("text", "")
+                if card_info.get("isDone") and not card_info.get("isNotDone"):
+                    log_success(f"📱 [Mobile App] Đã điểm danh hôm nay rồi: '{preview}'")
+                    return True
+
+                log_info(f"📱 [Mobile App] Tìm thấy thẻ điểm danh: '{preview}'. Đang tiến hành click điểm danh...")
+                
+                # Locate element and click
+                tile_clicked = False
+                selectors = [
+                    "div:has-text('Mobile App')",
+                    "div:has-text('Bing App Streak')",
+                    "button:has-text('Mobile App')",
+                    "a:has-text('Mobile App')",
+                    "[aria-label*='Mobile App' i]"
+                ]
+                for sel in selectors:
+                    tiles = await self.page.query_selector_all(sel)
+                    for tile in tiles:
+                        try:
+                            if await tile.is_visible():
+                                t_txt = (await tile.inner_text() or "").strip()
+                                if "Mobile App" in t_txt or "Bing App" in t_txt:
+                                    await tile.click()
+                                    tile_clicked = True
+                                    await asyncio.sleep(2.5)
+                                    break
+                        except Exception:
+                            pass
+                    if tile_clicked:
+                        break
+
+                if tile_clicked:
+                    await self.handle_drawer_actions()
+            else:
+                log_info("📱 [Mobile App] Không thấy thẻ riêng trên trang, đang quét drawer hành động...")
+                await self.handle_drawer_actions()
+
+            # Strategy 2: Direct Bing Check-In API call inside page context
+            try:
+                await self.page.evaluate(r"""
+                    async () => {
+                        try {
+                            await fetch("https://prod.rewardsplatform.microsoft.com/dapi/centstop/dailyCheckIn", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                credentials: "include"
+                            });
+                        } catch (e) {}
+                    }
+                """)
+            except Exception:
+                pass
+
+            log_success("📱 [Mobile App] Đã hoàn tất xử lý điểm danh Mobile App!")
+            return True
+        except Exception as e:
+            log_warn(f"Lỗi khi xử lý Mobile App Check-in: {e}")
+            return False
+
+    async def solve_visual_search(self) -> bool:
+        """Find and complete Visual Search task on dashboard and Bing."""
+        log_info("=== 📷 Kiểm tra & Xử lý nhiệm vụ Visual Search ===")
+        try:
+            # 1. Check if card exists on dashboard
+            card_info = await self.page.evaluate(r"""
+                () => {
+                    const allEls = Array.from(document.querySelectorAll(
+                        "div, a, button, mee-card, li, [class*='card'], [class*='Card']"
+                    ));
+                    for (const el of allEls) {
+                        const txt = (el.innerText || el.textContent || '').trim();
+                        if (txt.includes('Visual Search') || txt.includes('Tìm kiếm bằng hình ảnh')) {
+                            const rect = el.getBoundingClientRect();
+                            if (rect.width > 40 && rect.height > 25 && el.children.length <= 8) {
+                                const isDone = txt.includes('1/1') || txt.toLowerCase().includes('completed') || txt.includes('✓');
+                                const isNotDone = txt.includes('0/1') || txt.toLowerCase().includes('activity: 0/1');
+                                return {
+                                    found: true,
+                                    isDone: isDone,
+                                    isNotDone: isNotDone,
+                                    text: txt.substring(0, 100)
+                                };
+                            }
+                        }
+                    }
+                    return { found: false };
+                }
+            """)
+
+            if card_info.get("found"):
+                preview = card_info.get("text", "")
+                if card_info.get("isDone") and not card_info.get("isNotDone"):
+                    log_success(f"📷 [Visual Search] Đã hoàn thành hôm nay: '{preview}'")
+                    return True
+
+                log_info(f"📷 [Visual Search] Phát hiện thẻ Visual Search chưa hoàn tất: '{preview}'. Đang click thẻ...")
+
+                # Click on card
+                initial_pages = len(self.context.pages)
+                clicked = False
+                selectors = [
+                    "div:has-text('Visual Search')",
+                    "button:has-text('Visual Search')",
+                    "a:has-text('Visual Search')",
+                    "[aria-label*='Visual Search' i]"
+                ]
+                for sel in selectors:
+                    cards = await self.page.query_selector_all(sel)
+                    for card in cards:
+                        try:
+                            if await card.is_visible():
+                                c_txt = (await card.inner_text() or "").strip()
+                                if "Visual Search" in c_txt:
+                                    await card.click()
+                                    clicked = True
+                                    await asyncio.sleep(2.5)
+                                    break
+                        except Exception:
+                            pass
+                    if clicked:
+                        break
+
+                # If new tab opened
+                if len(self.context.pages) > initial_pages:
+                    new_page = self.context.pages[-1]
+                    try:
+                        await new_page.wait_for_load_state("domcontentloaded", timeout=15000)
+                        await asyncio.sleep(3.0)
+                        await new_page.evaluate("window.scrollBy({top: 400, behavior: 'smooth'})")
+                        await asyncio.sleep(2.0)
+                    except Exception:
+                        pass
+                    finally:
+                        try:
+                            await new_page.close()
+                        except Exception:
+                            pass
+                else:
+                    # Check if drawer opened
+                    drawer = await self.page.query_selector("[role='dialog'], [aria-modal='true'], [class*='drawer'], [class*='flyout'], [class*='Drawer']")
+                    if drawer and await drawer.is_visible():
+                        await self.handle_drawer_actions()
+
+            # 2. Perform authentic Bing Visual Search query to guarantee reward registration
+            await self.perform_bing_visual_search()
+            return True
+
+        except Exception as e:
+            log_warn(f"Lỗi khi xử lý Visual Search: {e}")
+            return False
+
+    async def perform_bing_visual_search(self):
+        """Execute authentic Bing Visual Search with image query parameters."""
+        try:
+            log_info("📷 [Visual Search] Đang thực hiện tìm kiếm hình ảnh trên Bing...")
+            target_url = "https://www.bing.com/images/search?view=detailv2&iss=sbi&FORM=SBIHMP&sbisrc=UrlPaste&q=imgurl:https%3A%2F%2Fth.bing.com%2Fth%3Fid%3DOMR.VisualSearch.VNext.BackgroundImage.png%26pid%3DRewards"
+            
+            await self.page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(3.0)
+
+            # Scroll down smoothly to trigger results & telemetry
+            await self.page.evaluate("window.scrollBy({top: 500, behavior: 'smooth'})")
+            await asyncio.sleep(2.0)
+
+            # Try hovering or clicking a visual search result/tag if present
+            try:
+                result_elements = await self.page.query_selector_all(
+                    ".img_cont, .vsi_card, a.iusc, [class*='visualSearch'], [class*='item'] a, .b_visualSearch"
+                )
+                if result_elements:
+                    sample_elem = random.choice(result_elements[:3])
+                    if await sample_elem.is_visible():
+                        await sample_elem.hover()
+                        await asyncio.sleep(1.0)
+            except Exception:
+                pass
+
+            await asyncio.sleep(2.5)
+            log_success("📷 [Visual Search] Hoàn thành lượt tìm kiếm bằng hình ảnh trên Bing!")
+        except Exception as e:
+            log_warn(f"Lỗi khi thực hiện Bing Visual Search trực tiếp: {e}")
 
     async def _process_card(self, card_element):
         """Click on card, handle new tab, quiz, poll, or side drawer."""

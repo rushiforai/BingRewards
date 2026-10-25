@@ -20,6 +20,8 @@ class BotConfig:
     max_delay_sec: float = 14.0
     fast_mode: bool = False
     run_msn_news: bool = True
+    run_mobile_checkin: bool = True
+    run_visual_search: bool = True
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     search_cooldown_batch_size: int = 4

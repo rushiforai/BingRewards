@@ -11,6 +11,8 @@
   "max_delay_sec": 14.0,
   "fast_mode": false,
   "run_msn_news": true,
+  "run_mobile_checkin": true,
+  "run_visual_search": true,
   "telegram_bot_token": "",
   "telegram_chat_id": "",
   "search_cooldown_batch_size": 5,

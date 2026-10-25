@@ -176,14 +176,22 @@ async def run_full_bot(config: BotConfig, account_label: str = "") -> dict:
 
         await bm.close_context()
 
-        # Phase 2: Mobile Context (Mobile Check-in, Mobile Search & MSN News)
-        if config.run_mobile_search or config.run_msn_news or config.run_daily_set:
+        # Phase 2: Mobile Context (Mobile Check-in, Visual Search, Mobile Search & MSN News)
+        if config.run_mobile_search or config.run_msn_news or config.run_daily_set or getattr(config, "run_mobile_checkin", True) or getattr(config, "run_visual_search", True):
             log_step(f"GIAI ĐOẠN 2: MOBILE TASKS & MOBILE SEARCH {f'({account_label})' if account_label else ''}")
             context_mob = await bm.get_context(is_mobile=True)
             page_mob = await context_mob.new_page()
 
-            # Mobile Dashboard Check-in and Drawers
             dash_mob = RewardsDashboard(page_mob, context_mob, config, is_mobile=True)
+
+            # Mobile Dashboard Check-in & Visual Search
+            if await dash_mob.open_dashboard("https://rewards.bing.com/dashboard"):
+                if getattr(config, "run_mobile_checkin", True):
+                    await dash_mob.solve_mobile_app_checkin()
+                if getattr(config, "run_visual_search", True):
+                    await dash_mob.solve_visual_search()
+
+            # Check /earn drawers & promotions
             if await dash_mob.open_dashboard("https://rewards.bing.com/earn"):
                 await dash_mob.handle_drawer_actions()
 
@@ -287,7 +295,7 @@ def show_menu(config: BotConfig):
             border_style="bright_blue"
         ))
 
-        console.print("[1] 🚀 Chạy toàn bộ nhiệm vụ (Daily Set + Desktop Search + Mobile Search)")
+        console.print("[1] 🚀 Chạy toàn bộ nhiệm vụ (Daily Set + Searches + Mobile Check-in + Visual Search)")
         console.print("[2] 📋 Chỉ làm Daily Set & More Activities")
         console.print("[3] 💻 Chỉ chạy Desktop Search")
         console.print("[4] 📱 Chỉ chạy Mobile Search")
@@ -333,6 +341,8 @@ def show_menu(config: BotConfig):
             Prompt.ask("\nNhấn Enter để quay lại menu...")
         elif choice == "7":
             config.headless = Confirm.ask("Chạy ở chế độ ẩn danh (Headless - không hiện cửa sổ trình duyệt)?", default=config.headless)
+            config.run_mobile_checkin = Confirm.ask("Tự động điểm danh Mobile App (Check-in Streak)?", default=config.run_mobile_checkin)
+            config.run_visual_search = Confirm.ask("Tự động làm nhiệm vụ Visual Search (Tìm kiếm bằng hình ảnh)?", default=config.run_visual_search)
             config.desktop_searches = int(Prompt.ask("Số lượt tìm kiếm Desktop", default=str(config.desktop_searches)))
             config.mobile_searches = int(Prompt.ask("Số lượt tìm kiếm Mobile", default=str(config.mobile_searches)))
             config.min_delay_sec = float(Prompt.ask("Thời gian chờ tối thiểu giữa các tìm kiếm (giây)", default=str(config.min_delay_sec)))

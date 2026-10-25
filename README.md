@@ -53,10 +53,12 @@ BingRewards/
 Phase 1: Desktop
   ├── Mở rewards dashboard → lấy điểm ban đầu
   ├── Daily Set & Activities (quizzes, polls, cards)
+  ├── Visual Search (Tìm kiếm bằng hình ảnh trên Bing)
   └── Desktop Search (30 lượt)
 
 Phase 2: Mobile
-  ├── Mobile Dashboard check-in
+  ├── Mobile App Check-in (Điểm danh chuỗi ngày trên Dashboard / Drawer)
+  ├── Mobile Visual Search (Xác nhận hoàn thành trên giao diện mobile)
   ├── Mobile Search (20 lượt)
   └── MSN News Read to Earn (10 bài)
 
