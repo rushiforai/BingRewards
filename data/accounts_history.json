@@ -1,15 +1,5 @@
 [
   {
-    "account": "vudinhnambr1@gmail.com",
-    "start_points": "2,900",
-    "end_points": "2,900",
-    "gained": 0,
-    "streak": "0",
-    "status": "Thành công",
-    "timestamp": "19/09/2026 06:14:39",
-    "date": "19/09/2026"
-  },
-  {
     "account": "vudinhnambr2@gmail.com",
     "start_points": "2,510",
     "end_points": "2,555",
@@ -1998,5 +1988,15 @@
     "status": "Thành công",
     "timestamp": "24/10/2026 22:08:29",
     "date": "24/10/2026"
+  },
+  {
+    "account": "vudinhnambr@gmail.com",
+    "start_points": "N/A",
+    "end_points": "1,996",
+    "gained": 0,
+    "streak": "0",
+    "status": "Thành công",
+    "timestamp": "25/10/2026 19:46:34",
+    "date": "25/10/2026"
   }
 ]
