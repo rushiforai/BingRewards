@@ -655,27 +655,49 @@ class RewardsDashboard:
                 await self.open_dashboard("https://rewards.bing.com/dashboard")
                 await asyncio.sleep(2.0)
 
-            # Strategy 1: Check tile on page
+            # Strategy 1: Check legitimate tile on page (strictly exclude header / navigation wrappers)
             card_info = await self.page.evaluate(r"""
                 () => {
-                    const allEls = Array.from(document.querySelectorAll(
-                        "div, a, button, mee-card, li, [class*='card'], [class*='Card']"
+                    const elements = Array.from(document.querySelectorAll(
+                        "mee-card, [class*='card'], [class*='Card'], [role='article'], li, a, button, div"
                     ));
-                    for (const el of allEls) {
+                    for (const el of elements) {
+                        if (el.closest('header, nav, [role="navigation"], [role="banner"], footer, #raf-flyout')) {
+                            continue;
+                        }
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width < 40 || rect.height < 25) continue;
+
                         const txt = (el.innerText || el.textContent || '').trim();
-                        if (txt.includes('Mobile App') || txt.includes('Bing App Streak') || (txt.includes('App') && txt.includes('Check-in'))) {
-                            const rect = el.getBoundingClientRect();
-                            if (rect.width > 40 && rect.height > 25 && el.children.length <= 8) {
-                                const isDone = txt.includes('1/1') || txt.toLowerCase().includes('completed') || txt.includes('✓');
-                                const isNotDone = txt.includes('0/1') || txt.toLowerCase().includes('check-in: 0/1');
-                                return {
-                                    found: true,
-                                    isDone: isDone,
-                                    isNotDone: isNotDone,
-                                    text: txt.substring(0, 100)
-                                };
+                        if (!txt || txt.length > 250) continue;
+
+                        const lower = txt.toLowerCase();
+                        if (!lower.includes('mobile app') && !lower.includes('bing app streak') && !(lower.includes('app') && lower.includes('check-in'))) {
+                            continue;
+                        }
+
+                        // Avoid wrapper if a child element also matches
+                        let hasMatchingChild = false;
+                        for (const child of Array.from(el.children)) {
+                            const cTxt = (child.innerText || child.textContent || '').toLowerCase();
+                            if (cTxt.includes('mobile app') || cTxt.includes('bing app streak') || (cTxt.includes('app') && cTxt.includes('check-in'))) {
+                                const cRect = child.getBoundingClientRect();
+                                if (cRect.width >= 40 && cRect.height >= 25) {
+                                    hasMatchingChild = true;
+                                    break;
+                                }
                             }
                         }
+                        if (hasMatchingChild) continue;
+
+                        const isDone = txt.includes('1/1') || lower.includes('completed') || txt.includes('✓') || lower.includes('đã điểm danh');
+                        const isNotDone = txt.includes('0/1') || lower.includes('check-in: 0/1') || lower.includes('chưa điểm danh');
+                        return {
+                            found: true,
+                            isDone: isDone,
+                            isNotDone: isNotDone,
+                            text: txt.replace(/\s+/g, ' ').substring(0, 100)
+                        };
                     }
                     return { found: false };
                 }
@@ -689,11 +711,12 @@ class RewardsDashboard:
 
                 log_info(f"📱 [Mobile App] Tìm thấy thẻ điểm danh: '{preview}'. Đang tiến hành click điểm danh...")
                 
-                # Locate element and click
+                # Locate element and click safely
                 tile_clicked = False
                 selectors = [
-                    "div:has-text('Mobile App')",
-                    "div:has-text('Bing App Streak')",
+                    "mee-card:has-text('Bing App Streak')",
+                    "mee-card:has-text('Mobile App')",
+                    "[class*='card']:has-text('Bing App Streak')",
                     "button:has-text('Mobile App')",
                     "a:has-text('Mobile App')",
                     "[aria-label*='Mobile App' i]"
@@ -702,13 +725,19 @@ class RewardsDashboard:
                     tiles = await self.page.query_selector_all(sel)
                     for tile in tiles:
                         try:
-                            if await tile.is_visible():
-                                t_txt = (await tile.inner_text() or "").strip()
-                                if "Mobile App" in t_txt or "Bing App" in t_txt:
-                                    await tile.click()
-                                    tile_clicked = True
-                                    await asyncio.sleep(2.5)
-                                    break
+                            if not await tile.is_visible():
+                                continue
+                            is_in_nav = await tile.evaluate("el => Boolean(el.closest('header, nav, [role=\"navigation\"], [role=\"banner\"], footer'))")
+                            if is_in_nav:
+                                continue
+                            t_txt = (await tile.inner_text() or "").strip()
+                            if len(t_txt) > 250:
+                                continue
+                            if "Mobile App" in t_txt or "Bing App" in t_txt:
+                                await tile.click()
+                                tile_clicked = True
+                                await asyncio.sleep(2.5)
+                                break
                         except Exception:
                             pass
                     if tile_clicked:
@@ -717,26 +746,8 @@ class RewardsDashboard:
                 if tile_clicked:
                     await self.handle_drawer_actions()
             else:
-                log_info("📱 [Mobile App] Không thấy thẻ riêng trên trang, đang quét drawer hành động...")
-                await self.handle_drawer_actions()
+                log_info("📱 [Mobile App] Không thấy thẻ điểm danh riêng trên trang.")
 
-            # Strategy 2: Direct Bing Check-In API call inside page context
-            try:
-                await self.page.evaluate(r"""
-                    async () => {
-                        try {
-                            await fetch("https://prod.rewardsplatform.microsoft.com/dapi/centstop/dailyCheckIn", {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                credentials: "include"
-                            });
-                        } catch (e) {}
-                    }
-                """)
-            except Exception:
-                pass
-
-            log_success("📱 [Mobile App] Đã hoàn tất xử lý điểm danh Mobile App!")
             return True
         except Exception as e:
             log_warn(f"Lỗi khi xử lý Mobile App Check-in: {e}")
@@ -746,27 +757,49 @@ class RewardsDashboard:
         """Find and complete Visual Search task on dashboard and Bing."""
         log_info("=== 📷 Kiểm tra & Xử lý nhiệm vụ Visual Search ===")
         try:
-            # 1. Check if card exists on dashboard
+            # 1. Check if card exists on dashboard (strictly exclude header / navigation wrappers)
             card_info = await self.page.evaluate(r"""
                 () => {
-                    const allEls = Array.from(document.querySelectorAll(
-                        "div, a, button, mee-card, li, [class*='card'], [class*='Card']"
+                    const elements = Array.from(document.querySelectorAll(
+                        "mee-card, [class*='card'], [class*='Card'], [role='article'], li, a, button, div"
                     ));
-                    for (const el of allEls) {
+                    for (const el of elements) {
+                        if (el.closest('header, nav, [role="navigation"], [role="banner"], footer, #raf-flyout')) {
+                            continue;
+                        }
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width < 40 || rect.height < 25) continue;
+
                         const txt = (el.innerText || el.textContent || '').trim();
-                        if (txt.includes('Visual Search') || txt.includes('Tìm kiếm bằng hình ảnh')) {
-                            const rect = el.getBoundingClientRect();
-                            if (rect.width > 40 && rect.height > 25 && el.children.length <= 8) {
-                                const isDone = txt.includes('1/1') || txt.toLowerCase().includes('completed') || txt.includes('✓');
-                                const isNotDone = txt.includes('0/1') || txt.toLowerCase().includes('activity: 0/1');
-                                return {
-                                    found: true,
-                                    isDone: isDone,
-                                    isNotDone: isNotDone,
-                                    text: txt.substring(0, 100)
-                                };
+                        if (!txt || txt.length > 250) continue;
+
+                        const lower = txt.toLowerCase();
+                        if (!lower.includes('visual search') && !lower.includes('tìm kiếm bằng hình ảnh')) {
+                            continue;
+                        }
+
+                        // Avoid wrapper if a child element also matches (pick deepest card)
+                        let hasMatchingChild = false;
+                        for (const child of Array.from(el.children)) {
+                            const cTxt = (child.innerText || child.textContent || '').toLowerCase();
+                            if (cTxt.includes('visual search') || cTxt.includes('tìm kiếm bằng hình ảnh')) {
+                                const cRect = child.getBoundingClientRect();
+                                if (cRect.width >= 40 && cRect.height >= 25) {
+                                    hasMatchingChild = true;
+                                    break;
+                                }
                             }
                         }
+                        if (hasMatchingChild) continue;
+
+                        const isDone = txt.includes('1/1') || lower.includes('completed') || txt.includes('✓') || lower.includes('đã hoàn thành');
+                        const isNotDone = txt.includes('0/1') || lower.includes('activity: 0/1') || lower.includes('chưa hoàn thành');
+                        return {
+                            found: true,
+                            isDone: isDone,
+                            isNotDone: isNotDone,
+                            text: txt.replace(/\s+/g, ' ').substring(0, 100)
+                        };
                     }
                     return { found: false };
                 }
@@ -784,22 +817,30 @@ class RewardsDashboard:
                 initial_pages = len(self.context.pages)
                 clicked = False
                 selectors = [
-                    "div:has-text('Visual Search')",
-                    "button:has-text('Visual Search')",
-                    "a:has-text('Visual Search')",
-                    "[aria-label*='Visual Search' i]"
+                    "mee-card:has-text('Visual Search'), mee-card:has-text('Tìm kiếm bằng hình ảnh')",
+                    "[class*='card']:has-text('Visual Search'), [class*='card']:has-text('Tìm kiếm bằng hình ảnh')",
+                    "[class*='Card']:has-text('Visual Search'), [class*='Card']:has-text('Tìm kiếm bằng hình ảnh')",
+                    "button:has-text('Visual Search'), button:has-text('Tìm kiếm bằng hình ảnh')",
+                    "a:has-text('Visual Search'), a:has-text('Tìm kiếm bằng hình ảnh')",
+                    "[aria-label*='Visual Search' i], [aria-label*='Tìm kiếm bằng hình ảnh' i]"
                 ]
                 for sel in selectors:
                     cards = await self.page.query_selector_all(sel)
                     for card in cards:
                         try:
-                            if await card.is_visible():
-                                c_txt = (await card.inner_text() or "").strip()
-                                if "Visual Search" in c_txt:
-                                    await card.click()
-                                    clicked = True
-                                    await asyncio.sleep(2.5)
-                                    break
+                            if not await card.is_visible():
+                                continue
+                            # Ensure not in navigation or header
+                            is_in_nav = await card.evaluate("el => Boolean(el.closest('header, nav, [role=\"navigation\"], [role=\"banner\"], footer'))")
+                            if is_in_nav:
+                                continue
+                            c_txt = (await card.inner_text() or "").strip()
+                            if len(c_txt) > 250:
+                                continue
+                            await card.click()
+                            clicked = True
+                            await asyncio.sleep(2.5)
+                            break
                         except Exception:
                             pass
                     if clicked:
@@ -835,32 +876,40 @@ class RewardsDashboard:
             return False
 
     async def perform_bing_visual_search(self):
-        """Execute authentic Bing Visual Search with image query parameters."""
+        """Execute authentic Bing Visual Search with varied realistic image query parameters."""
         try:
             log_info("📷 [Visual Search] Đang thực hiện tìm kiếm hình ảnh trên Bing...")
-            target_url = "https://www.bing.com/images/search?view=detailv2&iss=sbi&FORM=SBIHMP&sbisrc=UrlPaste&q=imgurl:https%3A%2F%2Fth.bing.com%2Fth%3Fid%3DOMR.VisualSearch.VNext.BackgroundImage.png%26pid%3DRewards"
+            sample_images = [
+                "https%3A%2F%2Fth.bing.com%2Fth%3Fid%3DOMR.VisualSearch.VNext.BackgroundImage.png%26pid%3DRewards",
+                "https%3A%2F%2Fth.bing.com%2Fth%3Fid%3DOHR.MilkyWayTasmania_EN-US8181820468_1920x1080.jpg%26pid%3DRewards",
+                "https%3A%2F%2Fth.bing.com%2Fth%3Fid%3DOHR.MountRainierFall_EN-US8743120934_1920x1080.jpg%26pid%3DRewards",
+                "https%3A%2F%2Fth.bing.com%2Fth%3Fid%3DOHR.BamburghCastle_EN-US9283741823_1920x1080.jpg%26pid%3DRewards",
+                "https%3A%2F%2Fth.bing.com%2Fth%3Fid%3DOHR.AutumnMaple_EN-US9182347102_1920x1080.jpg%26pid%3DRewards"
+            ]
+            chosen_img = random.choice(sample_images)
+            target_url = f"https://www.bing.com/images/search?view=detailv2&iss=sbi&FORM=SBIHMP&sbisrc=UrlPaste&q=imgurl:{chosen_img}"
             
             await self.page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
-            await asyncio.sleep(3.0)
+            await asyncio.sleep(random.uniform(2.5, 4.0))
 
             # Scroll down smoothly to trigger results & telemetry
-            await self.page.evaluate("window.scrollBy({top: 500, behavior: 'smooth'})")
-            await asyncio.sleep(2.0)
+            await self.page.evaluate("window.scrollBy({top: 450, behavior: 'smooth'})")
+            await asyncio.sleep(random.uniform(1.8, 3.0))
 
             # Try hovering or clicking a visual search result/tag if present
             try:
                 result_elements = await self.page.query_selector_all(
-                    ".img_cont, .vsi_card, a.iusc, [class*='visualSearch'], [class*='item'] a, .b_visualSearch"
+                    ".img_cont, .vsi_card, a.iusc, [class*='visualSearch'], [class*='item'] a, .b_visualSearch, [data-tag]"
                 )
                 if result_elements:
                     sample_elem = random.choice(result_elements[:3])
                     if await sample_elem.is_visible():
                         await sample_elem.hover()
-                        await asyncio.sleep(1.0)
+                        await asyncio.sleep(random.uniform(1.0, 1.8))
             except Exception:
                 pass
 
-            await asyncio.sleep(2.5)
+            await asyncio.sleep(random.uniform(2.0, 3.5))
             log_success("📷 [Visual Search] Hoàn thành lượt tìm kiếm bằng hình ảnh trên Bing!")
         except Exception as e:
             log_warn(f"Lỗi khi thực hiện Bing Visual Search trực tiếp: {e}")
