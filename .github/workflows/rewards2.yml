@@ -1,0 +1,102 @@
+name: Bing Rewards Daily Automation
+
+on:
+  schedule:
+    # 13:15 (1:15 PM) Giờ Việt Nam (06:15 UTC) - Chạy 1 lần/ngày
+    - cron: '15 6 * * *'
+  workflow_dispatch:
+    inputs:
+      target_account:
+        description: '🎯 Chọn tài khoản muốn chạy (hoặc All để chạy tất cả)'
+        required: true
+        default: 'All'
+        type: choice
+        options:
+          - 'All'
+          - 'Account 3'
+          - 'Account 5'
+          - 'Account 6'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  rewards:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright Browsers
+        run: |
+          python -m playwright install chromium --with-deps
+
+      - name: Run Rewards Bot
+        env:
+          TZ: 'Asia/Ho_Chi_Minh'
+          MICROSOFT_SESSION: ${{ secrets.MICROSOFT_SESSION }}
+          MICROSOFT_SESSION_3: ${{ secrets.MICROSOFT_SESSION_1 }}
+          MICROSOFT_SESSION_5: ${{ secrets.MICROSOFT_SESSION_2 }}
+          MICROSOFT_SESSION_6: ${{ secrets.MICROSOFT_SESSION_4 }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ACCOUNT_LABEL_3: ${{ secrets.ACCOUNT_LABEL_1 }}
+          ACCOUNT_LABEL_5: ${{ secrets.ACCOUNT_LABEL_2 }}
+          ACCOUNT_LABEL_6: ${{ secrets.ACCOUNT_LABEL_4 }}
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          sync_dashboard() {
+            python -c "from src.reporter import AccountReporter; AccountReporter.generate_html_dashboard()"
+            git add data/accounts_history.json dashboard.html index.html
+            git diff --quiet && git diff --staged --quiet || {
+              git commit -m "chore(stats): auto sync rewards dashboard [skip ci]"
+              for i in {1..5}; do
+                git pull --rebase -X ours origin main && git push origin main && break || sleep 5
+              done
+            }
+          }
+
+          TARGET="${{ github.event.inputs.target_account || 'All' }}"
+          if [ "$TARGET" = "All" ]; then
+            python main.py --all --headless --account "Account 3"
+            sync_dashboard || true
+            python main.py --all --headless --account "Account 5"
+            sync_dashboard || true
+            python main.py --all --headless --account "Account 6"
+            sync_dashboard || true
+          else
+            python main.py --all --headless --account "$TARGET"
+            sync_dashboard || true
+          fi
+
+      - name: Sync Dashboard & Push
+        if: always()
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          python -c "from src.reporter import AccountReporter; AccountReporter.generate_html_dashboard()"
+          git add data/accounts_history.json dashboard.html index.html
+          git diff --quiet && git diff --staged --quiet || {
+            git commit -m "chore(stats): update rewards dashboard and accounts history [skip ci]"
+            for i in {1..5}; do
+              git pull --rebase -X ours origin main && git push origin main && break || sleep 5
+            done
+          }
